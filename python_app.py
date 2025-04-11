@@ -6,19 +6,17 @@ from gemini_connection import analyze_image_with_gemini
 import json
 from dotenv import load_dotenv
 
-
-
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 load_dotenv()
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'
-
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
-OPEN_AI_KEY = os.getenv("OPENAI_API_KEY")
-if not OPEN_AI_KEY:
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Changed to correct environment variable
+if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI API KEY is missing. Please check your .env file.")
 
 if not os.path.exists(UPLOAD_FOLDER):
@@ -29,12 +27,14 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/', methods=['GET'])
-def test_route():
-    return render_template(
-        'index.html',
-        title='Gemini Image Analysis'
-    )
+# Add root route
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/analyze_image', methods=['POST', 'OPTIONS'])
 def analyze_image():
@@ -56,26 +56,34 @@ def analyze_image():
         file.save(filepath)
         
         try:
-            result = analyze_image_with_gemini(filepath, OPEN_AI_KEY)
+            result = analyze_image_with_gemini(filepath, GEMINI_API_KEY)
             
-            if "json" in result:
-                json_part = result.split("{", 1)[1].rsplit("}", 1)[0]
+            # Try to find JSON content in the response
+            try:
+                # First try to parse the entire response as JSON
+                dict_values = json.loads(result)
+            except json.JSONDecodeError:
+                # If that fails, try to extract JSON from the text
                 try:
-                    dict_values = json.loads("{" + json_part + "}")
-                    response = jsonify(dict_values)
-
-                    # Add CORS headers
-                    response.headers.add('Access-Control-Allow-Origin', '*')
-                    return response, 200
-                except json.JSONDecodeError as e:
-                    return jsonify({'error': 'Failed to parse analysis results'}), 500
-            else:
-                return jsonify({'error': 'Invalid response format from analysis'}), 500
+                    if "{" in result and "}" in result:
+                        json_part = result.split("{", 1)[1].rsplit("}", 1)[0]
+                        dict_values = json.loads("{" + json_part + "}")
+                    else:
+                        # If no JSON found, return the raw text
+                        dict_values = {"text": result}
+                except json.JSONDecodeError:
+                    dict_values = {"text": result}
+            
+            response = jsonify(dict_values)
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 200
 
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            app.logger.error(f"Error processing image: {str(e)}")
+            return jsonify({'error': f'Error processing image: {str(e)}'}), 500
         
         finally:
+            # Clean up the uploaded file
             if os.path.exists(filepath):
                 os.remove(filepath)
     
